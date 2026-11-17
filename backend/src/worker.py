@@ -7,6 +7,7 @@ from src.config.settings import REDIS_URL
 from src.models import Job, Dataset, Report
 from src.services.business import analyze
 from src.services.reports import deliver
+from src.services import payouts
 from src.services.audit import record
 logging.basicConfig(level=logging.INFO)
 def execute(job_id):
@@ -34,6 +35,8 @@ def tick():
             d=deliver(db,r)
             if d:record(db,'worker','report.delivered',{'id':r.id,'delivery':d.id})
         db.commit()
+    with Session() as db:
+        payouts.settle_sweep(db)  # 推进未结付款与退款：回执宽限后对账，退款退避重试
 def main():
     r=Redis.from_url(REDIS_URL,socket_timeout=3)
     # This Compose stack has a single worker. A crash must not strand its jobs.
@@ -41,6 +44,8 @@ def main():
         for j in db.scalars(select(Job).where(Job.status=='running')):
             j.status='queued';record(db,'worker','job.recovered',{'id':j.id})
         db.commit()
+    with Session() as db:
+        payouts.recover(db)  # 中断后恢复未结付款和退款
     while True:
         Path('/tmp/heartbeat').touch()
         try:
